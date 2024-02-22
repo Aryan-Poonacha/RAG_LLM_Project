@@ -35,14 +35,15 @@ class MyConversationalRetrievalChain:
         # Tokenize the inputs
         input_ids = self.tokenizer.encode(prompt, return_tensors='pt')
 
-        # Generate a response
         chat_history_ids = self.model.generate(
-            input_ids, 
-            max_length=1000, 
-            pad_token_id=self.tokenizer.eos_token_id, 
-            eos_token_id=self.tokenizer.eos_token_id, 
-            num_return_sequences=1
-        )
+        input_ids, 
+        max_length=200, 
+        temperature=0.2,
+        length_penalty=0.8,
+        pad_token_id=self.tokenizer.eos_token_id, 
+        eos_token_id=self.tokenizer.eos_token_id, 
+        num_return_sequences=1
+    )
 
         # Decode the response
         response = self.tokenizer.decode(chat_history_ids[:, input_ids.shape[-1]:][0], skip_special_tokens=True)

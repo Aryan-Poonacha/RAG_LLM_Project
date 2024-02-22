@@ -1,22 +1,27 @@
-Prompt to LLM: Here is some relevant contextual information retrieved from the database: Elifine 500W Folding Electric Bike, 20" Electric Bicycle for Adults, City Cruiser Ebike with 48V/ 7.8Ah Removable Battery , Max 19Mph Electric Commuter Please use any relevant information, if available, in it to answer the following query: What is the wattage of the fender electric bike?
+Prompt to LLM: Here is some relevant contextual information retrieved from the database: Disorder breeds by heating of the blood; Please use any relevant information, if available, in it to answer the following query: Disorder breeds by heating what?
 Response from LLM: 
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
 
-What is the wattage of the electric bicycle?
+The following table shows the results of the following tests:
+
+The following table shows the results of the following tests:
+
+The following table shows the results of the following tests:
+

@@ -18,3 +18,4 @@ altair==4.0
 torch
 scikit-learn
 pypdf2
+sentence_transformers

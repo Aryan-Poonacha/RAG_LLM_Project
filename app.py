@@ -6,6 +6,8 @@ from html_chatbot_template import css, bot_template, user_template
 from PyPDF2 import PdfReader
 
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, AutoTokenizer, AutoModel
+from sentence_transformers import SentenceTransformer
+
 
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
@@ -34,7 +36,13 @@ class MyConversationalRetrievalChain:
         input_ids = self.tokenizer.encode(prompt, return_tensors='pt')
 
         # Generate a response
-        chat_history_ids = self.model.generate(input_ids, max_length=1000, pad_token_id=self.tokenizer.eos_token_id)
+        chat_history_ids = self.model.generate(
+            input_ids, 
+            max_length=1000, 
+            pad_token_id=self.tokenizer.eos_token_id, 
+            eos_token_id=self.tokenizer.eos_token_id, 
+            num_return_sequences=1
+        )
 
         # Decode the response
         response = self.tokenizer.decode(chat_history_ids[:, input_ids.shape[-1]:][0], skip_special_tokens=True)
@@ -48,7 +56,8 @@ class MyConversationalRetrievalChain:
         with open('latestpromptandresponse.txt', 'w') as f:
             f.write(f"Prompt to LLM: {prompt}\nResponse from LLM: {response}")
 
-        return {'response': response}
+        return {'prompt': prompt, 'response': response}
+    
 
     
 class ConversationBufferMemory:
@@ -63,13 +72,7 @@ class ConversationBufferMemory:
             return chat_state[self.memory_key]
 
 
-# Load GPT-2 model and tokenizer
-model = GPT2LMHeadModel.from_pretrained('gpt2')
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 
-# Load pre-trained model and tokenizer
-vectorization_tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
-vectorization_model = AutoModel.from_pretrained('bert-base-uncased')
 
 def extract_text(pdf_files):
     text = ""
@@ -114,84 +117,67 @@ def get_chunks(text, separator="\n", chunk_size=512, chunk_overlap=64):
     return chunks
 
 
-def get_vectorstore(chunks):
-    """
-    Function to create a vector store for the chunks of text to store the embeddings
-
-    Args:
-        chunks (list): The list of chunks of text
-
-    Returns:
-        vector_store (dict): The vector store for the chunks of text
-    """
-    # Initialize the vector store
+def get_vectorstore_bert(chunks, vectorization_model, vectorization_tokenizer, model_name):
     vector_store = {}
-
-    # Iterate over the chunks
     for chunk in chunks:
-        # Tokenize the chunk
         inputs = vectorization_tokenizer(chunk, return_tensors='pt', truncation=True, padding=True)
-
-        # Get the embeddings for the chunk
         with torch.no_grad():
             outputs = vectorization_model(**inputs)
-
-        # Get the embeddings of the [CLS] token (first token)
         embeddings = outputs.last_hidden_state[:, 0, :].numpy()
-
-        # Normalize the embeddings
         embeddings = normalize(embeddings)
-
-        # Add the embeddings to the vector store
         vector_store[chunk] = embeddings
+
+    with open(f'{model_name}_vector_store.txt', 'w') as f:
+        f.write(str(vector_store))
 
     return vector_store
 
-def retrieve_most_similar_chunk(query, vector_store):
-    """
-    Function to retrieve the most similar chunk for a given query
-
-    Args:
-        query (str): The user query
-        vector_store (dict): The vector store for the chunks of text
-
-    Returns:
-        most_similar_chunk (str): The most similar chunk for the given query
-    """
-    # Tokenize the query
+def retrieve_most_similar_chunk_bert(query, vector_store, vectorization_model, vectorization_tokenizer, model_name):
     inputs = vectorization_tokenizer(query, return_tensors='pt', truncation=True, padding=True)
-
-    # Get the embeddings for the query
     with torch.no_grad():
         outputs = vectorization_model(**inputs)
-
-    # Get the embeddings of the [CLS] token (first token)
     query_embeddings = outputs.last_hidden_state[:, 0, :].numpy()
-
-    # Normalize the query embeddings
     query_embeddings = normalize(query_embeddings)
-
-    # Initialize the maximum similarity and the most similar chunk
     max_similarity = -1
     most_similar_chunk = None
-
-    # Iterate over the chunks in the vector store
     for chunk, embeddings in vector_store.items():
-        # Calculate the cosine similarity between the query embeddings and the chunk embeddings
         similarity = cosine_similarity(query_embeddings, embeddings)
-
-        # If the similarity is higher than the maximum similarity, update the maximum similarity and the most similar chunk
         if similarity > max_similarity:
             max_similarity = similarity
             most_similar_chunk = chunk
 
-    # Print the vectorized query
-    print(f"Vectorized Query: {query_embeddings}")
+    with open(f'{model_name}_query_log.txt', 'w') as f:
+        f.write(f"Vectorized Query: {query_embeddings}\nMost Similar Chunk: {most_similar_chunk}")
 
-    # Print the most similar chunk
-    print(f"Most Similar Chunk: {most_similar_chunk}")
+    return most_similar_chunk
 
-    with open('query_log.txt', 'w') as f:
+
+def get_vectorstore(chunks, vectorization_model, model_name):
+    vector_store = {}
+    for chunk in chunks:
+        # Encode the chunk with the SentenceTransformer model
+        embeddings = vectorization_model.encode([chunk])
+        embeddings = normalize(embeddings)
+        vector_store[chunk] = embeddings
+
+    with open(f'{model_name}_vector_store.txt', 'w') as f:
+        f.write(str(vector_store))
+
+    return vector_store
+
+def retrieve_most_similar_chunk(query, vector_store, vectorization_model, model_name):
+    # Encode the query with the SentenceTransformer model
+    query_embeddings = vectorization_model.encode([query])
+    query_embeddings = normalize(query_embeddings)
+    max_similarity = -1
+    most_similar_chunk = None
+    for chunk, embeddings in vector_store.items():
+        similarity = cosine_similarity(query_embeddings, embeddings)
+        if similarity > max_similarity:
+            max_similarity = similarity
+            most_similar_chunk = chunk
+
+    with open(f'{model_name}_query_log.txt', 'w') as f:
         f.write(f"Vectorized Query: {query_embeddings}\nMost Similar Chunk: {most_similar_chunk}")
 
     return most_similar_chunk
@@ -245,14 +231,14 @@ def generate_response(question):
         response (str): The response from the chat model
     """
     # Retrieve the most similar chunk for the user query
-    context = retrieve_most_similar_chunk(question, st.session_state.vector_store)
+    context = retrieve_most_similar_chunk(question, st.session_state.vector_store, st.session_state.vectorization_model2, 'all-MiniLM-L6-v2')
 
     # Get the response from the chat model for the user query
     response = st.session_state.conversations({'question': question, 'context': context})
 
-    # Add the response to the UI
+    # Add the prompt and response to the UI
     st.write(bot_template.replace(
-        "{{MSG}}", response['response']), unsafe_allow_html=True)
+        "{{MSG}}", f"Prompt to LLM: {response['prompt']}\nResponse from LLM: {response['response']}"), unsafe_allow_html=True)
     
     # Print the response added to the UI
     print(f"Response added to UI: {response['response']}")
@@ -260,26 +246,14 @@ def generate_response(question):
         f.write(f"Response added to UI: {response['response']}")
 
 
+
 ## Landing page UI
 def run_UI():
-    """
-    The main UI function to display the UI for the webapp
-
-    Args:
-        None
-
-    Returns:
-        None
-    """
-
     # Load the environment variables (API keys)
     load_dotenv()
 
     # Set the page tab title
-    st.set_page_config(page_title="DocuMentor", page_icon="🤖", layout="wide")
-
-    # Add the custom CSS to the UI
-    st.write(css, unsafe_allow_html=True)
+    st.set_page_config(page_title="RAG LLM Info Bot", page_icon="🤖", layout="wide")
 
     # Initialize the session state variables to store the conversations and chat history
     if "conversations" not in st.session_state:
@@ -287,13 +261,15 @@ def run_UI():
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = None
     if "vector_store" not in st.session_state: 
-        st.session_state.vector_store = None  
+        st.session_state.vector_store = {}  # Initialize as an empty dictionary
+    if "vectorization_model2" not in st.session_state:
+        st.session_state.vectorization_model2 = SentenceTransformer('all-MiniLM-L6-v2')  # Initialize the model
 
     # Set the page title
-    st.header("DocuMentor: Conversations with Your Data 🤖")
+    st.header("RAG LLM Info Bot")
 
     # Input text box for user query
-    user_question = st.text_input("Upload your data and ask me anything?")
+    user_question = st.text_input("Upload more pdf files and ask me anything!")
 
     # Check if the user has entered a query/prompt
     if user_question:
@@ -302,10 +278,10 @@ def run_UI():
 
     # Sidebar menu
     with st.sidebar:
-        st.subheader("Document Uploader")
+        st.subheader("Upload More PDFs")
 
         # Document uploader
-        pdf_files = st.file_uploader("Upload a document you want to chat with", type="pdf", key="upload", accept_multiple_files=True)
+        pdf_files = st.file_uploader("Upload more documents", type="pdf", key="upload", accept_multiple_files=True)
 
         # Process the document after the user clicks the button
         if st.button("Start Chatting ✨"):
@@ -313,21 +289,25 @@ def run_UI():
             with st.spinner("Processing"):
                 # Convert the PDF to raw text
                 raw_text = extract_text(pdf_files)
-                print((f"Raw Text: {raw_text}") )
                         
                 # Get the chunks of text
                 chunks = get_chunks(raw_text)
-                print(f"Chunks: {chunks}")
                         
-                # Create a vector store for the chunks of text
-                st.session_state.vector_store = get_vectorstore(chunks)
-                print(f"Vector Store: {st.session_state.vector_store}")  
+                # Initialize different models
+                vectorization_model1 = AutoModel.from_pretrained('bert-base-uncased')
+                vectorization_tokenizer1 = AutoTokenizer.from_pretrained('bert-base-uncased')
 
-                with open('log.txt', 'w') as f:
-                    f.write(f"Raw Text: {raw_text}\nChunks: {chunks}\nVector Store: {st.session_state.vector_store}")
+                # Create vector stores for each model
+                vector_store1 = get_vectorstore_bert(chunks, vectorization_model1, vectorization_tokenizer1, 'bert-base-uncased')
+                st.session_state.vector_store = get_vectorstore(chunks, st.session_state.vectorization_model2, 'all-MiniLM-L6-v2')
+
+                # Retrieve the most similar chunk for each model
+                most_similar_chunk1 = retrieve_most_similar_chunk_bert(user_question, vector_store1, vectorization_model1, vectorization_tokenizer1, 'bert-base-uncased')
+                most_similar_chunk2 = retrieve_most_similar_chunk(user_question, st.session_state.vector_store, st.session_state.vectorization_model2, 'all-MiniLM-L6-v2')
 
                 # Create a conversation chain for the chat model
-                st.session_state.conversations = get_conversation_chain(st.session_state.vector_store) 
+                st.session_state.conversations = get_conversation_chain(vector_store1) 
+
 
 # Application entry point
 if __name__ == "__main__":

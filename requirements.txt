@@ -17,4 +17,4 @@ requests==2.27.1
 altair==4.0
 torch
 scikit-learn
-pdfplumber
+pypdf2

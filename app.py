@@ -1,21 +1,18 @@
 import streamlit as st
 from dotenv import load_dotenv
 
-import pdfplumber
-
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
-
 from html_chatbot_template import css, bot_template, user_template
+
+from PyPDF2 import PdfReader
 
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, AutoTokenizer, AutoModel
 
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
 
+from openai import ChatCompletion
+
+import os
 import torch
 import numpy as np
 
@@ -30,8 +27,11 @@ class MyConversationalRetrievalChain:
         question = inputs['question']
         context = inputs.get('context', '')
 
+        # Add the additional prompt
+        prompt = f"Here is some relevant contextual information retrieved from the database: {context} Please use any relevant information, if available, in it to answer the following query: {question}"
+
         # Tokenize the inputs
-        input_ids = self.tokenizer.encode(context + question, return_tensors='pt')
+        input_ids = self.tokenizer.encode(prompt, return_tensors='pt')
 
         # Generate a response
         chat_history_ids = self.model.generate(input_ids, max_length=1000, pad_token_id=self.tokenizer.eos_token_id)
@@ -39,7 +39,28 @@ class MyConversationalRetrievalChain:
         # Decode the response
         response = self.tokenizer.decode(chat_history_ids[:, input_ids.shape[-1]:][0], skip_special_tokens=True)
 
+        # Print the prompt sent to the language model
+        print(f"Prompt to LLM: {prompt}")
+
+        # Print the response from the language model
+        print(f"Response from LLM: {response}")
+
+        with open('latestpromptandresponse.txt', 'w') as f:
+            f.write(f"Prompt to LLM: {prompt}\nResponse from LLM: {response}")
+
         return {'response': response}
+
+    
+class ConversationBufferMemory:
+    def __init__(self, memory_key="chat_history", return_messages=True):
+        self.memory_key = memory_key
+        self.return_messages = return_messages
+
+    def __call__(self, chat_state):
+        if self.memory_key not in chat_state:
+            chat_state[self.memory_key] = []
+        if self.return_messages:
+            return chat_state[self.memory_key]
 
 
 # Load GPT-2 model and tokenizer
@@ -53,10 +74,12 @@ vectorization_model = AutoModel.from_pretrained('bert-base-uncased')
 def extract_text(pdf_files):
     text = ""
     for pdf_file in pdf_files:
-        with pdfplumber.open(pdf_file) as pdf:
-            for page in pdf.pages:
-                text += page.extract_text()
+        pdf_reader = PdfReader(pdf_file)
+        for page in pdf_reader.pages:
+            text += page.extract_text()
     return text
+
+
 
 def get_chunks(text, separator="\n", chunk_size=512, chunk_overlap=64):
     """
@@ -162,6 +185,15 @@ def retrieve_most_similar_chunk(query, vector_store):
             max_similarity = similarity
             most_similar_chunk = chunk
 
+    # Print the vectorized query
+    print(f"Vectorized Query: {query_embeddings}")
+
+    # Print the most similar chunk
+    print(f"Most Similar Chunk: {most_similar_chunk}")
+
+    with open('query_log.txt', 'w') as f:
+        f.write(f"Vectorized Query: {query_embeddings}\nMost Similar Chunk: {most_similar_chunk}")
+
     return most_similar_chunk
 
 def get_conversation_chain(vector_store):
@@ -174,10 +206,19 @@ def get_conversation_chain(vector_store):
     Returns:
         conversation_chain (MyConversationalRetrievalChain): The conversation chain for the chat model
     """
-    
-    # Initialize the chat model using local GPT-2 model
-    model = GPT2LMHeadModel.from_pretrained('gpt2')
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    # Get the model type from the environment variables
+    model_type = os.getenv('MODEL_TYPE')
+
+    if model_type == 'gpt2':
+        # Initialize the chat model using local GPT-2 model
+        model = GPT2LMHeadModel.from_pretrained('gpt2')
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    elif model_type == 'gpt-3.5-turbo':
+        # Initialize the chat model using OpenAI API
+        model = ChatCompletion.create(model="gpt-3.5-turbo", api_key=os.getenv('OPENAI_API_KEY'))
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
 
     # Initialize the chat memory
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
@@ -191,6 +232,7 @@ def get_conversation_chain(vector_store):
     )
 
     return conversation_chain
+
 
 def generate_response(question):
     """
@@ -208,20 +250,14 @@ def generate_response(question):
     # Get the response from the chat model for the user query
     response = st.session_state.conversations({'question': question, 'context': context})
 
-    # Update the chat history
-    st.session_state.chat_history = response['chat_history']
-
     # Add the response to the UI
-    for i, message in enumerate(st.session_state.chat_history):
-        # Check if the message is from the user or the chatbot
-        if i % 2 == 0:
-            # User message
-            st.write(user_template.replace(
-                "{{MSG}}", message.content), unsafe_allow_html=True)
-        else:
-            # Chatbot message
-            st.write(bot_template.replace(
-                "{{MSG}}", message.content), unsafe_allow_html=True)
+    st.write(bot_template.replace(
+        "{{MSG}}", response['response']), unsafe_allow_html=True)
+    
+    # Print the response added to the UI
+    print(f"Response added to UI: {response['response']}")
+    with open('ui_log.txt', 'w') as f:
+        f.write(f"Response added to UI: {response['response']}")
 
 
 ## Landing page UI
@@ -250,6 +286,8 @@ def run_UI():
         st.session_state.conversations = None
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = None
+    if "vector_store" not in st.session_state: 
+        st.session_state.vector_store = None  
 
     # Set the page title
     st.header("DocuMentor: Conversations with Your Data 🤖")
@@ -275,18 +313,21 @@ def run_UI():
             with st.spinner("Processing"):
                 # Convert the PDF to raw text
                 raw_text = extract_text(pdf_files)
-                st.write(f"Raw Text: {raw_text}")  # Print raw text
+                print((f"Raw Text: {raw_text}") )
                         
                 # Get the chunks of text
                 chunks = get_chunks(raw_text)
-                st.write(f"Chunks: {chunks}")  # Print chunks
+                print(f"Chunks: {chunks}")
                         
                 # Create a vector store for the chunks of text
-                vector_store = get_vectorstore(chunks)
-                st.write(f"Vector Store: {vector_store}")  # Print vector store
+                st.session_state.vector_store = get_vectorstore(chunks)
+                print(f"Vector Store: {st.session_state.vector_store}")  
+
+                with open('log.txt', 'w') as f:
+                    f.write(f"Raw Text: {raw_text}\nChunks: {chunks}\nVector Store: {st.session_state.vector_store}")
 
                 # Create a conversation chain for the chat model
-                st.session_state.conversations = get_conversation_chain(vector_store)
+                st.session_state.conversations = get_conversation_chain(st.session_state.vector_store) 
 
 # Application entry point
 if __name__ == "__main__":
